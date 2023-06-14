@@ -1,0 +1,3 @@
+host,password,function
+10.0.0.1,SomePassword,reboot
+polyphone.domain,RandomPassword,restore
