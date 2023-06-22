@@ -114,23 +114,26 @@ for device in devices:
             #Enhance to put supported functions into help statement and execute that.
     #Try Older Firmware Method
     fw5 = make_request('https://' + device["host"] + '/form-submit/' + function, headers={ "Cookie": "Authorization=Basic " + get_creds(device["password"]) }, method="POST")
-    if fw5[0] == 401:
-        logging.warning(device["host"] + " " + device["function"] + " " + str(fw5))
-        #Returns 401 if version 6 firmware.
-        logging.info(device["host"] + " " + device["function"] + " Trying v6 firmware method.")
-        fw6_auth = make_request('https://' + device["host"] + '/form-submit/auth.htm', headers={'Authorization': 'Basic ' + get_creds(device["password"]) }, method="POST")
-        if "SUCCESS" in str(fw6_auth[0]):
-            session_cookie = "".join(filter(lambda a: 'session' in a, fw6_auth[1].getheader("Set-Cookie").split(';')))
-            fw6_CSRF = make_request('https://' + device["host"] + '/index.htm', headers = { 'Authorization': 'Basic ' + get_creds(device["password"]), "Cookie": session_cookie })
-            if fw6_CSRF[1].status == 200:
-                parser = MyHTMLParser()
-                parser.feed(str(fw6_CSRF[0]))
-                if parser.token == "":
-                    logging.error(device["host"] + " " + device["function"] + " Error in CSRF token - No token available")
-                    continue
-                make_request('https://' + device["host"] + '/form-submit/' + function, headers = {'Authorization': 'Basic ' +  get_creds(device["password"]), "Cookie": session_cookie, "anti-csrf-token": parser.token }, method="POST")
-        else:
-            logging.error(device["host"] + " " + device["function"] + " " + str(fw6_auth[0]))
-    if fw5[0] == 200:
-        logging.info(device["host"] + " " + device["function"] + "SUCCESS")
-        continue
+    if isinstance(fw5, (str, list, tuple)):
+        if str(fw5[0]) == '401':
+            logging.warning(device["host"] + " " + device["function"] + " " + str(fw5))
+            #Returns 401 if version 6 firmware.
+            logging.info(device["host"] + " " + device["function"] + " Trying v6 firmware method.")
+            fw6_auth = make_request('https://' + device["host"] + '/form-submit/auth.htm', headers={'Authorization': 'Basic ' + get_creds(device["password"]) }, method="POST")
+            if "SUCCESS" in str(fw6_auth[0]):
+                session_cookie = "".join(filter(lambda a: 'session' in a, fw6_auth[1].getheader("Set-Cookie").split(';')))
+                fw6_CSRF = make_request('https://' + device["host"] + '/index.htm', headers = { 'Authorization': 'Basic ' + get_creds(device["password"]), "Cookie": session_cookie })
+                if fw6_CSRF[1].status == 200:
+                    parser = MyHTMLParser()
+                    parser.feed(str(fw6_CSRF[0]))
+                    if parser.token == "":
+                        logging.error(device["host"] + " " + device["function"] + " Error in CSRF token - No token available")
+                        continue
+                    make_request('https://' + device["host"] + '/form-submit/' + function, headers = {'Authorization': 'Basic ' +  get_creds(device["password"]), "Cookie": session_cookie, "anti-csrf-token": parser.token }, method="POST")
+            else:
+                logging.error(device["host"] + " " + device["function"] + " " + str(fw6_auth[0]))
+        if fw5[0] == 200:
+            logging.info(device["host"] + " " + device["function"] + "SUCCESS")
+            continue
+    else:
+        logging.error(device["host"] + " " + device["function"] + " " + str(fw5))
