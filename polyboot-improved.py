@@ -98,6 +98,7 @@ elif args.template:
         writer.writerow(["host", "password", "function"])
         writer.writerow(["10.0.0.1", "SomePassword", "reboot"])
         writer.writerow(["polyphone.domain", "RandomPassword", "restore"])
+        writer.writerow(["polyTriophone.domain", "RandomPassword", "reboot-system"])
     quit()
 else:
     argParser.print_help()
@@ -112,7 +113,7 @@ for device in devices:
         case "reboot-system":
             function = "RebootSystem"
         case _:
-            logging.error(device["host"] + " " + device["function"] + " Error function not supported. Please use either reboot or restore")
+            logging.error(device["host"] + " " + device["function"] + " Error function not supported. Please use either reboot, reboot-system (Trio), or restore")
             #Enhance to put supported functions into help statement and execute that.
     #Try Older Firmware Method
     fw5 = make_request('https://' + device["host"] + '/form-submit/' + function, headers={ "Cookie": "Authorization=Basic " + get_creds(device["password"]) }, method="POST")
