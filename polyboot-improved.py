@@ -109,6 +109,8 @@ for device in devices:
             function = "Reboot"
         case "restore":
             function = "Utilities/restorePhoneToFactory"
+        case "reboot-system":
+            function = "RebootSystem"
         case _:
             logging.error(device["host"] + " " + device["function"] + " Error function not supported. Please use either reboot or restore")
             #Enhance to put supported functions into help statement and execute that.
@@ -127,9 +129,10 @@ for device in devices:
                     parser = MyHTMLParser()
                     parser.feed(str(fw6_CSRF[0]))
                     if parser.token == "":
-                        logging.error(device["host"] + " " + device["function"] + " Error in CSRF token - No token available")
-                        continue
-                    make_request('https://' + device["host"] + '/form-submit/' + function, headers = {'Authorization': 'Basic ' +  get_creds(device["password"]), "Cookie": session_cookie, "anti-csrf-token": parser.token }, method="POST")
+                        logging.info(device["host"] + " " + device["function"] + " CSRF token - No token available")
+                        make_request('https://' + device["host"] + '/form-submit/' + function, headers = {'Authorization': 'Basic ' +  get_creds(device["password"]), "Cookie": session_cookie }, method="POST")
+                    else:
+                        make_request('https://' + device["host"] + '/form-submit/' + function, headers = {'Authorization': 'Basic ' +  get_creds(device["password"]), "Cookie": session_cookie, "anti-csrf-token": parser.token }, method="POST")
             else:
                 logging.error(device["host"] + " " + device["function"] + " " + str(fw6_auth[0]))
         if fw5[0] == 200:
