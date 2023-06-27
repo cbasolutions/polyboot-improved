@@ -9,6 +9,7 @@ from pathlib import Path
 import logging
 import csv
 import sys
+import re
 
 def check_python_version():
     version = sys.version_info
@@ -46,6 +47,7 @@ def make_request(url, headers=None, data=None, method=None):
 
 #Disable SSL cert verification
 ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+ctx.set_ciphers('DEFAULT') #fw version 5.6 doesn't work with python 3.10+
 ctx.check_hostname = False
 ctx.verify_mode = ssl.VerifyMode.CERT_NONE
 
@@ -61,6 +63,7 @@ argParser.add_argument("-a", "--host", help="Hostname or IP for single operation
 argParser.add_argument("-p", "--password", help="Password for device in single operation mode.")
 argParser.add_argument("-o", "--ofile", help="Output filename for logging.")
 argParser.add_argument("-t", "--template", action='store_true', help="Create CSV template for  bulk operation.")
+argParser.add_argument("-d", "--data", help="Data to use in POST request. E.g. Provisioning: 407=2&405=voipt2.polycom.com/594") 
 args = argParser.parse_args()
 if args.ofile:
     logging.basicConfig(level=logging.INFO, filename=args.ofile, filemode="w", format="%(asctime)s %(levelname)s %(message)s")
@@ -95,28 +98,41 @@ elif args.ifile:
 elif args.template:
     with open("polyboot-improved.csv", "w", newline="") as csvfile:
         writer = csv.writer(csvfile)
-        writer.writerow(["host", "password", "function"])
+        writer.writerow(["host", "password", "function", "data"])
         writer.writerow(["10.0.0.1", "SomePassword", "reboot"])
         writer.writerow(["polyphone.domain", "RandomPassword", "restore"])
-        writer.writerow(["polyTriophone.domain", "RandomPassword", "reboot-system"])
+        writer.writerow(["polyphone.domain", "RandomPassword", "provision","407=2&405=voipt2.polycom.com/594"])
     quit()
 else:
     argParser.print_help()
     quit()
 
 for device in devices:
+    #Log older firmware.
+    if make_request('https://' + device["host"])[1].getheader("Server") == "Polycom SoundPoint IP Telephone HTTPd" and re.search("VVX",str(make_request('https://' + device["host"] + '/index.htm', headers={ "Cookie": "Authorization=Basic " + get_creds(device["password"]) })[0])).group() == "VVX":
+        logging.info(device["host"] + " " + device["function"] + " - VVX Device using older firmware, consider an upgrade. " + device["host"] +"," + device["password"] + ",provision,407=2&405=voipt2.polycom.com/594")
     match device["function"].lower():
         case "reboot":
-            function = "Reboot"
+            function = "/Reboot"
+            postData = None
         case "restore":
-            function = "Utilities/restorePhoneToFactory"
+            function = "/Utilities/restorePhoneToFactory"
+            postData = None
         case "reboot-system":
-            function = "RebootSystem"
+            function = "/RebootSystem"
+            postData = None
+        case "provision":
+            function = ""
+            if device["data"]:
+                postData = device["data"].encode("utf-8")
+            else: 
+                logging.error(device["host"] + " " + device["function"] + " - Provision function used and data element is not set.")
+                continue
         case _:
-            logging.error(device["host"] + " " + device["function"] + " Error function not supported. Please use either reboot, reboot-system (Trio), or restore")
-            #Enhance to put supported functions into help statement and execute that.
+            logging.error(device["host"] + " " + device["function"] + " Error function not supported.")
+            continue
     #Try Older Firmware Method
-    fw5 = make_request('https://' + device["host"] + '/form-submit/' + function, headers={ "Cookie": "Authorization=Basic " + get_creds(device["password"]) }, method="POST")
+    fw5 = make_request('https://' + device["host"] + '/form-submit' + function, headers={ "Cookie": "Authorization=Basic " + get_creds(device["password"]) }, data=postData, method="POST")
     if isinstance(fw5, (str, list, tuple)):
         if str(fw5[0]) == '401':
             logging.warning(device["host"] + " " + device["function"] + " " + str(fw5))
@@ -131,9 +147,9 @@ for device in devices:
                     parser.feed(str(fw6_CSRF[0]))
                     if parser.token == "":
                         logging.info(device["host"] + " " + device["function"] + " CSRF token - No token available")
-                        make_request('https://' + device["host"] + '/form-submit/' + function, headers = {'Authorization': 'Basic ' +  get_creds(device["password"]), "Cookie": session_cookie }, method="POST")
+                        make_request('https://' + device["host"] + '/form-submit' + function, headers = {'Authorization': 'Basic ' +  get_creds(device["password"]), "Cookie": session_cookie }, method="POST")
                     else:
-                        make_request('https://' + device["host"] + '/form-submit/' + function, headers = {'Authorization': 'Basic ' +  get_creds(device["password"]), "Cookie": session_cookie, "anti-csrf-token": parser.token }, method="POST")
+                        make_request('https://' + device["host"] + '/form-submit' + function, headers = {'Authorization': 'Basic ' +  get_creds(device["password"]), "Cookie": session_cookie, "anti-csrf-token": parser.token }, method="POST")
             else:
                 logging.error(device["host"] + " " + device["function"] + " " + str(fw6_auth[0]))
         if fw5[0] == 200:
