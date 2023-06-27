@@ -1,3 +1,5 @@
-host,password,function
+host,password,function,data
 10.0.0.1,SomePassword,reboot
 polyphone.domain,RandomPassword,restore
+polyphone.domain,RandomPassword,provision,407=2&405=voipt2.polycom.com/594
+10.0.0.1,SomePassword,reboot-system
