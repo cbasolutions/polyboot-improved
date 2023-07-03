@@ -18,6 +18,8 @@ options:
 * -f FUNCTION, --function FUNCTION. </br>
     - Poly form-submit function to run.  </br>
     - Current functions: provision (requires data), reboot, reboot-system (Trio, CCX, Android devices), restore.
+        - The provision function sends the request to https://host/form-submit.
+        - This allows for any function which uses the same URI. E.g., NTP. Use developer tools to interrogate --data needed.
 * -d DATA, --data DATA.
     - Data for POST function. Currently only used by the provision function.
 * -a HOST, --host HOST 
