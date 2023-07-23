@@ -12,6 +12,7 @@ import sys
 import re
 import ast
 
+
 def check_python_version():
     version = sys.version_info
     return version.major >= 3 and version.minor >= 10
@@ -22,16 +23,25 @@ def polyVersion(firmware):
 class MyHTMLParser(HTMLParser):
     def __init__(self):
         super().__init__()
-        MyHTMLParser.token = ""
+        self.token = ""
+        self.titleData = ""
+        self.title = ""
         self.reset()
 
     def handle_starttag(self, tag, attrs):
-        if tag == "meta":
+        if tag == 'title':
+            self.title = True
+        if tag == 'meta':
             for attr,value in attrs:
-                if attr == "name" and value == "csrf-token":
+                if attr == 'name' and value == 'csrf-token':
                     for content,token in attrs:
-                        if content == "content":
-                            MyHTMLParser.token = token
+                        self.token = token
+    def handle_endtag(self, tag):
+        if tag == 'title':
+            self.title = False
+    def handle_data(self, data):
+        if self.title:
+            self.titleData = data
 
 def get_creds(device_password):
     device_creds = 'Polycom:'+ device_password
@@ -132,6 +142,7 @@ argParser = argparse.ArgumentParser(prog=Path(__file__).name, usage='''
     Options func, host, and password are required for single use
     Option ifile can be used with or without ofile
     Option template will create a template in for the ifile in the current working directory.''')
+argParser.add_argument("--debug",action="store_true",help="print debug messages to stderr")
 argParser.add_argument("-i", "--ifile", help="Input filename for bulk operations. CSV file with headers: host,password,function. Host is either host or IP")
 argParser.add_argument("-f", "--function", help="Poly form-submit function to run.")
 argParser.add_argument("-a", "--host", help="Hostname or IP for single operation.")
@@ -141,9 +152,9 @@ argParser.add_argument("-t", "--template", action='store_true', help="Create CSV
 argParser.add_argument("-d", "--data", help="Data to use in POST request. E.g. Provisioning:  {'device.prov.serverType':'2', 'device.prov.serverName':'voipt2.polycom.com/594'}") 
 args = argParser.parse_args()
 if args.ofile:
-    logging.basicConfig(level=logging.INFO, filename=args.ofile, filemode="w", format="%(asctime)s %(levelname)s %(message)s")
+    logging.basicConfig(level=logging.DEBUG, filename=args.ofile, filemode="w", format="%(asctime)s %(levelname)s %(message)s")
 else:
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+    logging.basicConfig(level=logging.DEBUG, format="%(asctime)s %(levelname)s %(message)s")
 
 if not check_python_version():
     logging.error("You must be running Python 3.10 or newer.")
@@ -183,19 +194,24 @@ else:
     quit()
 
 for device in devices:
+    parser = MyHTMLParser()
     device_check = make_request('https://' + device['host'] + '/Utilities/softwareUpgrade/getPhoneVersion', headers={ "Cookie": "Authorization=Basic " + get_creds(device['password'])}, method="GET")
     if device_check['reason'] == "OK":
+        parser.feed(make_request('https://' + device['host'] + '/index.htm', headers={ "Cookie": "Authorization=Basic " + get_creds(device['password'])}, method="GET")['body'].decode())
         version = device_check['body'].decode()
         match polyVersion(device_check['body'].decode()):
             case _ if polyVersion(version) < polyVersion("6"):
                 if device_check['headers']['Server'] == "Polycom SoundPoint IP Telephone HTTPd":
                     if device_check['headers']['Server'] == "Polycom SoundPoint IP Telephone HTTPd" and re.search("VVX", str(make_request('https://' + device['host'] + '/index.htm', headers={ "Cookie": "Authorization=Basic " + get_creds(device['password'])}, method="GET"))).group():
-                        logging.info(device['host'] + " " + device['function'] + " - VVX Device using older firmware, consider an upgrade. " + device['host'] +"," + device['password'] + ",provision,{'device.prov.serverType':'2', 'device.prov.serverName':'voipt2.polycom.com/594'}")
-                method = "old"
+                        logging.info(f"{device['host']} - {device['function']} - VVX Device using older firmware, consider an upgrade: {device['host']},{device['password']},provision,\"{{'device.prov.serverType':'2', 'device.prov.serverName':'voipt2.polycom.com/594'}}\"")
+                if "Trio" in parser.titleData:
+                    method = "new"
+                else:
+                    method = "old"
             case _ if polyVersion(version) >= polyVersion("6"):
                 method = "new"
             case _:
-                logging.error(device['host'] + " " + device['function'] + " - Device version check failed.")
+                logging.error(f"{device['host']} - {device['function']} - Device version check failed.")
                 continue
         match device['function'].lower():
             case "reboot":
@@ -208,6 +224,9 @@ for device in devices:
                 function = "/RebootSystem"
                 postData = None
             case "provision":
+                if version not in polyMapping:
+                    logging.error(f"{device['host']} - {device['function']} - Unknown firmware {version}, unable to provision.")
+                    continue
                 function = ""
                 if device['data']:
                     dataDict = ast.literal_eval(device['data'])
@@ -219,48 +238,59 @@ for device in devices:
                             postData += "&" + polyMapping[version][key] + "=" + dataDict[key]
                     postData = postData.encode("utf-8")
                 else: 
-                    logging.error(device['host'] + " " + device['function'] + " - Provision function used and data element is not set.")
+                    logging.error(f"{device['host']} - {device['function']} - Provision function used and data element is not set.")
                     continue
             case _:
-                logging.error(device['host'] + " " + device['function'] + " Error function not supported.")
+                logging.error(f"{device['host']} - {device['function']} - Function not supported.")
                 continue
         match method:
             case "old":
                 process = make_request('https://' + device['host'] + '/form-submit' + function, headers={ "Cookie": "Authorization=Basic " + get_creds(device['password']) }, data=postData, method="POST")
-                if process['reason'] == "OK" and process['body'].decode() == "CONF_CHANGE":
-                    logging.debug(device['host'] + " " + device['function'] + " Function executed properly.")
+                if process['reason'] == "OK" and ( process['body'].decode() == "CONF_CHANGE" or device['function'].lower() == 'reboot' or device['function'].lower() == 'restore' ):
+                    if args.debug:
+                        logging.debug(f"{device['host']} - {device['function']}: {process['status']} - {process['reason']} - {process['body'].decode()}")
+                    else:
+                        logging.info(f"{device['host']} - {device['function']}: {process['status']} - {process['reason']}")
                 else:
-                    logging.error(device['host'] + " " + device['function'] + " Function failed to execute properly.")
+                    if args.debug:
+                        logging.debug(f"{device['host']} - {device['function']}: {process['status']} - {process['reason']} - {process['body'].decode()}")
+                    else:
+                        logging.error(f"{device['host']} - {device['function']}: {process['status']} - {process['reason']}")
             case "new":
                 auth = make_request('https://' + device['host'] + '/form-submit/auth.htm', headers={'Authorization': 'Basic ' + get_creds(device['password']) }, method="POST")
                 if auth['reason'] == "OK":
                     session_cookie = "".join(filter(lambda a: 'session' in a, auth['headers']['Set-Cookie'].split(';')))
                     if not session_cookie.startswith("session"):
-                        logging.error(device['host'] + " " + device['function'] + " No valid session cookie.")
+                        if args.debug:
+                            logging.debug(f"{device['host']} - {device['function']}: {auth['status']} - {auth['reason']} - {auth['headers']['Set-Cookie']}")
+                        else:
+                            logging.error(f"{device['host']} - {device['function']}: {auth['status']} - {auth['reason']} - No session cookie")
                         continue
                     else:
                         csrf_request = make_request('https://' + device['host'] + '/index.htm', headers = { 'Authorization': 'Basic ' + get_creds(device['password']), "Cookie": session_cookie })
                         if csrf_request['reason'] == "OK":
-                            parser = MyHTMLParser()
                             parser.feed(csrf_request['body'].decode())
                             if parser.token == "":
-                                logging.debug(device['host'] + " " + device['function'] + " CSRF token - No token available")
+                                if args.debug:
+                                    logging.debug(f"{device['host']} - {device['function']} - CSRF token - No token available")
                                 process = make_request('https://' + device['host'] + '/form-submit' + function, headers = {'Authorization': 'Basic ' +  get_creds(device['password']), "Cookie": session_cookie }, data=postData, method="POST")
-                                if process['reason'] == "OK" and process['body'].decode() == "CONF_CHANGE":
-                                    logging.debug(device['host'] + " " + device['function'] + " Function executed properly.")
+                                if process['reason'] == "OK" and (( process['body'].decode() == "CONF_CHANGE" and device['function'] == "provision") or device['function'] == "restore" or device['function'] == "reboot" ):
+                                    if args.debug:
+                                        logging.debug(f"{device['host']} - {device['function']}: {process['status']} - {process['reason']} - {process['body'].decode()}")
                                 else:
-                                    logging.error(device['host'] + " " + device['function'] + " Function failed to execute properly.")
+                                    logging.error(f'{device["host"]} - {device["function"]}: {process["status"]} - {process["reason"]}')
                             else:
                                 process = make_request('https://' + device['host'] + '/form-submit' + function, headers = {'Authorization': 'Basic ' +  get_creds(device['password']), "Cookie": session_cookie, "anti-csrf-token": parser.token }, data=postData, method="POST")
-                                if process['reason'] == "OK" and process['body'].decode() == "CONF_CHANGE":
-                                    logging.debug(device['host'] + " " + device['function'] + " Function executed properly.")
+                                if process['reason'] == "OK" and (( process['body'].decode() == "CONF_CHANGE" and device['function'] == "provision") or device['function'] == "restore" or device['function'] == "reboot" ):
+                                    if args.debug:
+                                        logging.debug(f"{device['host']} - {device['function']}: {process['status']} - {process['reason']} - {process['body'].decode()}")
                                 else:
-                                    logging.error(device['host'] + " " + device['function'] + " Function failed to execute properly.")
+                                    logging.error(f'{device["host"]} - {device["function"]}: {process["status"]} - {process["reason"]}')
             case _:
-                logging.error(device['host'] + " " + device['function'] + " Function failed to execute properly: No method found.")
+                logging.error(f"{device['host']} - {device['function']} - No method found.")
     elif device_check['reason'] == "Unauthorized":
-        logging.error(device['host'] + " " + device['function'] + " " + device_check['reason'])
+        logging.error(f"{device['host']} - {device['function']} - {device_check['status']} - {device_check['reason']}")
         continue
     else:
-        logging.error(device['host'] + " " + device['function'] + " " + str(device_check['reason']))
+        logging.error(f"{device['host']} - {device['function']} - {str(device_check['reason'])}")
         continue
